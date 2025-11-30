@@ -27,8 +27,7 @@ def flush_channel(channel_index):
     timestamp_us = channel_start_time[channel_index]
     seconds, millis = divmod(timestamp_us // 1000, 1000)
     hex_dump = " ".join(f"{byte:02X}" for byte in packet)
-    ascii_text = "".join(chr(byte) if 32 <= byte <= 126 else "." for byte in packet)
-    log_line = f"{'<>'[channel_index]} {seconds:6d}.{millis:03d}  {hex_dump:<48}  {ascii_text}"
+    log_line = f"{'<>'[channel_index]} {seconds:6d}.{millis:03d} {hex_dump}"
     print(log_line, flush=True)
     log_file.write(log_line + "\n")
     log_file.flush()
