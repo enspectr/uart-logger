@@ -1,19 +1,35 @@
-import sys, serial, time
+import argparse
+import serial
+import time
+import sys
 
 MAGIC = 0xA5
 
-if len(sys.argv) < 6:
-    print("usage: python uart-logger.py PORT BAUD PARITY(N|E|O) INVERT(0|1) LOG [MAX_BYTES] [GAP_MS]", file=sys.stderr)
-    sys.exit(1)
+def parse_args():
+    p = argparse.ArgumentParser(prog="uart-logger.py")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, required=True)
+    p.add_argument("--parity", choices=["N", "E", "O", "n", "e", "o"], required=True)
+    p.add_argument("--invert", type=int, choices=[0, 1], required=True)
+    p.add_argument("--log", required=True)
+    p.add_argument("--max-bytes", type=int, default=16)
+    p.add_argument("--gap-ms", type=float, default=0)
+    return p.parse_args()
 
-#Example: python uart-logger.py COM16 9600 N 1 log.txt 10 1000
+#Example: python uart-logger.py --port COM16 --baud 9600 --parity N --invert 1 --log log.txt --max-bytes 10 --gap-ms 1000
 
-port_name, baudrate, parity_mode, invert_flag, log_path, *extra_args = sys.argv[1:]
-max_packet_bytes = int(extra_args[0]) if extra_args else 16
-gap_timeout_us = int(float(extra_args[1]) * 1000) if len(extra_args) > 1 else 0
+args = parse_args()
+
+port_name = args.port
+baudrate = args.baud
+parity_mode = args.parity.upper()
+invert_flag = args.invert
+log_path = args.log
+max_packet_bytes = args.max_bytes
+gap_timeout_us = int(args.gap_ms * 1000)
 
 serial_port = serial.Serial(port_name, 115200, timeout=0.1)
-serial_port.write(f"s{baudrate},{parity_mode.upper()},{invert_flag}\n".encode("ascii"))
+serial_port.write(f"s{baudrate},{parity_mode},{invert_flag}\n".encode("ascii"))
 serial_port.flush()
 
 log_file = open(log_path, "w", encoding="utf-8", newline="")
