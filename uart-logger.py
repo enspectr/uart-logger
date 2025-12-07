@@ -1,4 +1,4 @@
-import sys, serial
+import sys, serial, time
 
 MAGIC = 0xA5
 
@@ -22,14 +22,22 @@ channel_packets = [[], []]
 channel_start_time = [0, 0]
 last_byte_time = [0, 0]
 
+offset_us = None
+
+def format_time(ts_us):
+    abs_us = ts_us + offset_us if offset_us is not None else ts_us
+    sec = abs_us // 1_000_000
+    ms = (abs_us // 1000) % 1000
+    t = time.localtime(sec)
+    return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
+
 def flush_channel(channel_index):
     packet = channel_packets[channel_index]
     if not packet:
         return
     timestamp_us = channel_start_time[channel_index]
-    seconds, millis = divmod(timestamp_us // 1000, 1000)
     hex_dump = " ".join(f"{byte:02X}" for byte in packet)
-    log_line = f"{'AB'[channel_index]} {seconds}.{millis:03d} {hex_dump}"
+    log_line = f"{'AB'[channel_index]} {format_time(timestamp_us)} {hex_dump}"
     print(log_line, flush=True)
     log_file.write(log_line + "\n")
     log_file.flush()
@@ -63,6 +71,9 @@ try:
                 sys.exit(2)
 
             timestamp_us = ts0 | (ts1 << 8) | (ts2 << 16) | (ts3 << 24)
+
+            if offset_us is None:
+                offset_us = time.time_ns() // 1000 - timestamp_us
 
             if channel_packets[channel_id]:
                 if max_packet_bytes and len(channel_packets[channel_id]) >= max_packet_bytes:
