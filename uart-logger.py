@@ -1,9 +1,11 @@
 import sys, serial
 
+MAGIC = 0xA5
+
 if len(sys.argv) < 6:
     print("usage: python uart-logger.py PORT BAUD PARITY(N|E|O) INVERT(0|1) LOG [MAX_BYTES] [GAP_MS]", file=sys.stderr)
     sys.exit(1)
-    
+
 #Example: python uart-logger.py COM16 9600 N 1 log.txt 10 1000
 
 port_name, baudrate, parity_mode, invert_flag, log_path, *extra_args = sys.argv[1:]
@@ -27,12 +29,15 @@ def flush_channel(channel_index):
     timestamp_us = channel_start_time[channel_index]
     seconds, millis = divmod(timestamp_us // 1000, 1000)
     hex_dump = " ".join(f"{byte:02X}" for byte in packet)
-    log_line = f"{'<>'[channel_index]} {seconds:6d}.{millis:03d} {hex_dump}"
+    log_line = f"{'AB'[channel_index]} {seconds}.{millis:03d} {hex_dump}"
     print(log_line, flush=True)
     log_file.write(log_line + "\n")
     log_file.flush()
     packet.clear()
     channel_start_time[channel_index] = 0
+
+def calc_checksum(chan, ts0, ts1, ts2, ts3, data):
+    return chan ^ ts0 ^ ts1 ^ ts2 ^ ts3 ^ data
 
 try:
     while True:
@@ -43,11 +48,19 @@ try:
             continue
 
         raw_buffer.extend(read_chunk)
-        while len(raw_buffer) >= 6:
-            channel_id, ts0, ts1, ts2, ts3, data_byte = raw_buffer[:6]
-            del raw_buffer[:6]
+        while len(raw_buffer) >= 8:
+            magic, channel_id, ts0, ts1, ts2, ts3, data_byte, csum = raw_buffer[:8]
+            del raw_buffer[:8]
+
+            if magic != MAGIC:
+                print(f"error: bad magic 0x{magic:02X}", file=sys.stderr)
+                sys.exit(2)
             if channel_id > 1:
-                continue
+                print(f"error: bad channel {channel_id}", file=sys.stderr)
+                sys.exit(2)
+            if csum != calc_checksum(channel_id, ts0, ts1, ts2, ts3, data_byte):
+                print("error: checksum mismatch", file=sys.stderr)
+                sys.exit(2)
 
             timestamp_us = ts0 | (ts1 << 8) | (ts2 << 16) | (ts3 << 24)
 

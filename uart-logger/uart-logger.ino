@@ -7,6 +7,8 @@ const uint UART0_RX_PIN = 1;
 const uint UART1_TX_PIN = 4;
 const uint UART1_RX_PIN = 5;
 
+const uint8_t MAGIC = 0xA5;
+
 bool sniffing = false;
 uint32_t t0 = 0;
 
@@ -22,14 +24,21 @@ void setInvert(bool invert) {
 }
 
 void sendRecord(uint8_t chan, uint8_t value) {
-  uint8_t rec[6];
+  uint8_t rec[8];
   uint32_t t = micros() - t0;
-  rec[0] = chan;
-  rec[1] = (uint8_t)(t);
-  rec[2] = (uint8_t)(t >> 8);
-  rec[3] = (uint8_t)(t >> 16);
-  rec[4] = (uint8_t)(t >> 24);
-  rec[5] = value;
+
+  rec[0] = MAGIC;
+  rec[1] = chan;
+  rec[2] = (uint8_t)(t);
+  rec[3] = (uint8_t)(t >> 8);
+  rec[4] = (uint8_t)(t >> 16);
+  rec[5] = (uint8_t)(t >> 24);
+  rec[6] = value;
+
+  uint8_t cs = 0;
+  for (uint8_t i = 1; i <= 6; i++) cs ^= rec[i];
+  rec[7] = cs;
+
   Serial.write(rec, sizeof(rec));
 }
 
