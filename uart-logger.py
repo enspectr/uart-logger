@@ -4,108 +4,99 @@ import time
 import sys
 
 MAGIC = 0xA5
+L1_BAUD = 9600
+L1_PARITY = "N"
+L1_INVERT = 1
+L2_BAUD = 115200
+L2_PARITY = "N"
+L2_INVERT = 1
+
+#Example: python uart-logger.py --port1 COM16 --port2 COM18
 
 def parse_args():
     p = argparse.ArgumentParser(prog="uart-logger.py")
-    p.add_argument("--port", required=True)
-    p.add_argument("--baud", type=int, required=True)
-    p.add_argument("--parity", choices=["N", "E", "O", "n", "e", "o"], required=True)
-    p.add_argument("--invert", type=int, choices=[0, 1], required=True)
-    p.add_argument("--log", required=True)
-    p.add_argument("--max-bytes", type=int, default=16)
-    p.add_argument("--gap-ms", type=float, default=0)
-    return p.parse_args()
+    p.add_argument("--port", dest="port1")
+    p.add_argument("--port1", dest="port1")
+    p.add_argument("--port2")
+    a = p.parse_args()
+    if not a.port1:
+        p.error("missing --port or --port1")
+    return a
 
-#Example: python uart-logger.py --port COM16 --baud 9600 --parity N --invert 1 --log log.txt --max-bytes 10 --gap-ms 1000
+def safe_name(s):
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in s)
 
-args = parse_args()
+class Listener:
+    def __init__(self, port_name, baudrate, parity_mode, invert_flag, start_tag):
+        self.port_name = port_name
+        self.parity_mode = parity_mode
+        self.invert_flag = invert_flag
+        self.serial_port = serial.Serial(port_name, 115200, timeout=0)
+        self.serial_port.write(f"s{baudrate},{parity_mode},{invert_flag}\n".encode("ascii"))
+        self.serial_port.flush()
+        log_name = f"log_{start_tag}_b{baudrate}_p{parity_mode}_i{invert_flag}_{safe_name(port_name)}.txt"
+        self.log_file = open(log_name, "w", encoding="utf-8", newline="", buffering=1)
+        self.raw_buffer = bytearray()
+        self.offset_us = None
+        self.tag = safe_name(port_name)
 
-port_name = args.port
-baudrate = args.baud
-parity_mode = args.parity.upper()
-invert_flag = args.invert
-log_path = args.log
-max_packet_bytes = args.max_bytes
-gap_timeout_us = int(args.gap_ms * 1000)
+    def poll(self):
+        chunk = self.serial_port.read(self.serial_port.in_waiting or 1)
+        if not chunk:
+            return False
 
-serial_port = serial.Serial(port_name, 115200, timeout=0.1)
-serial_port.write(f"s{baudrate},{parity_mode},{invert_flag}\n".encode("ascii"))
-serial_port.flush()
+        self.raw_buffer.extend(chunk)
 
-log_file = open(log_path, "w", encoding="utf-8", newline="")
-raw_buffer = bytearray()
-channel_packets = [[], []]
-channel_start_time = [0, 0]
-last_byte_time = [0, 0]
-
-offset_us = None
-
-def format_time(ts_us):
-    abs_us = ts_us + offset_us if offset_us is not None else ts_us
-    sec = abs_us // 1_000_000
-    ms = (abs_us // 1000) % 1000
-    t = time.localtime(sec)
-    return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
-
-def flush_channel(channel_index):
-    packet = channel_packets[channel_index]
-    if not packet:
-        return
-    timestamp_us = channel_start_time[channel_index]
-    hex_dump = " ".join(f"{byte:02X}" for byte in packet)
-    log_line = f"{'AB'[channel_index]} {format_time(timestamp_us)} {hex_dump}"
-    print(log_line, flush=True)
-    log_file.write(log_line + "\n")
-    log_file.flush()
-    packet.clear()
-    channel_start_time[channel_index] = 0
-
-def calc_checksum(chan, ts0, ts1, ts2, ts3, data):
-    return chan ^ ts0 ^ ts1 ^ ts2 ^ ts3 ^ data
-
-try:
-    while True:
-        read_chunk = serial_port.read(serial_port.in_waiting or 1)
-        if not read_chunk:
-            for channel_index in (0, 1):
-                flush_channel(channel_index)
-            continue
-
-        raw_buffer.extend(read_chunk)
-        while len(raw_buffer) >= 8:
-            magic, channel_id, ts0, ts1, ts2, ts3, data_byte, csum = raw_buffer[:8]
-            del raw_buffer[:8]
-
+        while len(self.raw_buffer) >= 8:
+            magic, channel_id, ts0, ts1, ts2, ts3, data_byte, csum = self.raw_buffer[:8]
+            del self.raw_buffer[:8]
             if magic != MAGIC:
-                print(f"error: bad magic 0x{magic:02X}", file=sys.stderr)
-                sys.exit(2)
+                print(f"error: bad magic 0x{magic:02X} on {self.port_name}", file=sys.stderr)
+                raise SystemExit(2)
             if channel_id > 1:
-                print(f"error: bad channel {channel_id}", file=sys.stderr)
-                sys.exit(2)
-            if csum != calc_checksum(channel_id, ts0, ts1, ts2, ts3, data_byte):
-                print("error: checksum mismatch", file=sys.stderr)
-                sys.exit(2)
+                print(f"error: bad channel {channel_id} on {self.port_name}", file=sys.stderr)
+                raise SystemExit(2)
+            if csum != (channel_id ^ ts0 ^ ts1 ^ ts2 ^ ts3 ^ data_byte):
+                print(f"error: checksum mismatch on {self.port_name}", file=sys.stderr)
+                raise SystemExit(2)
+            ts_us = ts0 | (ts1 << 8) | (ts2 << 16) | (ts3 << 24)
+            if self.offset_us is None:
+                self.offset_us = time.time_ns() // 1000 - ts_us
+            abs_us = ts_us + self.offset_us
+            sec = abs_us // 1_000_000
+            ms = (abs_us // 1000) % 1000
+            t = time.localtime(sec)
+            ch = "AB"[channel_id]
+            ts_str = f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
+            line = f"{ch} {ts_str} {data_byte:02X}"
+            print(f"{self.tag}:{line}", flush=True)
+            self.log_file.write(line + "\n")
+        return True
 
-            timestamp_us = ts0 | (ts1 << 8) | (ts2 << 16) | (ts3 << 24)
+    def close(self):
+        self.log_file.close()
+        self.serial_port.close()
 
-            if offset_us is None:
-                offset_us = time.time_ns() // 1000 - timestamp_us
+def main():
+    args = parse_args()
+    start_tag = time.strftime("%Y%m%d_%H%M%S")
+    listeners = [Listener(args.port1, L1_BAUD, L1_PARITY, L1_INVERT, start_tag)]
+    if args.port2:
+        listeners.append(Listener(args.port2, L2_BAUD, L2_PARITY, L2_INVERT, start_tag))
 
-            if channel_packets[channel_id]:
-                if max_packet_bytes and len(channel_packets[channel_id]) >= max_packet_bytes:
-                    flush_channel(channel_id)
-                elif gap_timeout_us and timestamp_us - last_byte_time[channel_id] > gap_timeout_us:
-                    flush_channel(channel_id)
+    try:
+        while True:
+            any_data = False
+            for l in listeners:
+                if l.poll():
+                    any_data = True
+            if not any_data:
+                time.sleep(0.001)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for l in listeners:
+            l.close()
 
-            if not channel_packets[channel_id]:
-                channel_start_time[channel_id] = timestamp_us
-
-            channel_packets[channel_id].append(data_byte)
-            last_byte_time[channel_id] = timestamp_us
-except KeyboardInterrupt:
-    pass
-finally:
-    for channel_index in (0, 1):
-        flush_channel(channel_index)
-    log_file.close()
-    serial_port.close()
+if __name__ == "__main__":
+    main()
