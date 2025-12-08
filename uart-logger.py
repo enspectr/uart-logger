@@ -69,7 +69,7 @@ class Listener:
             ch = "AB"[channel_id]
             ts_str = f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
             line = f"{ch} {ts_str} {data_byte:02X}"
-            print(f"{self.tag}:{line}", flush=True)
+#            print(f"{self.tag}:{line}", flush=True)
             self.log_file.write(line + "\n")
         return True
 
