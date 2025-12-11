@@ -5,6 +5,7 @@ from datetime import datetime
 from collections import defaultdict
 
 LINE_RE = re.compile(r'^([A-Za-z])\s+(\d\d:\d\d:\d\d\.\d+)\s+([0-9A-Fa-f]{2})$')
+MAX_PERIOD = 12
 
 
 def parse_entries(path: Path):
@@ -90,6 +91,37 @@ def pretty_115200(frame):
     return " ".join(f"{b:02X}" for b in frame) or "."
 
 
+def compress(rows):
+    sig = [(c, t) for c, _, t in rows]
+    out = []
+    i = 0
+    n = len(rows)
+
+    while i < n:
+        lim = min(MAX_PERIOD, n - i)
+        done = False
+
+        for p in range(1, lim + 1):
+            if i + 2 * p > n or sig[i:i + p] != sig[i + p:i + 2 * p]:
+                continue
+
+            r = 2
+            while i + (r + 1) * p <= n and sig[i:i + p] == sig[i + r * p:i + (r + 1) * p]:
+                r += 1
+
+            out += rows[i:i + p]
+            out.append((None, rows[i][1], f"x{r}"))
+            i += r * p
+            done = True
+            break
+
+        if not done:
+            out.append(rows[i])
+            i += 1
+
+    return out
+
+
 def process_file(path: Path):
     entries = parse_entries(path)
     name = path.name.lower()
@@ -102,7 +134,10 @@ def process_file(path: Path):
         fmt = pretty_9600
 
     frames.sort(key=lambda x: x[2])
-    lines = [f"{ch} {ts} {fmt(bts)}" for ch, ts, _, bts in frames]
+
+    rows = [(ch, ts, fmt(bts)) for ch, ts, _, bts in frames]
+    rows = compress(rows)
+    lines = [f"R {ts} {txt}" if ch is None else f"{ch} {ts} {txt}" for ch, ts, txt in rows]
 
     out_path = path.with_name(path.stem + "_pretty.txt")
     out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
