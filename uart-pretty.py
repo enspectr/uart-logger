@@ -73,13 +73,21 @@ def pretty_9600(frame):
     s = []
     for b in payload:
         s.append(chr(b) if 32 <= b < 127 else f"\\x{b:02X}")
-    return "".join(s) or "."
+    text = "".join(s)
+    if "," in text:
+        parts = text.split(",")
+        if len(parts) > 1:
+            text = ",".join(parts[:-1])
+    return text or "."
 
 
 def pretty_115200(frame):
     if frame[:2] == [0xEB, 0x90] and len(frame) == frame[2]:
-        frame = frame[2:]
-    return " ".join(f"{b:02X}" for b in frame)
+        if len(frame) > 4:
+            frame = frame[3:-1]
+        else:
+            frame = []
+    return " ".join(f"{b:02X}" for b in frame) or "."
 
 
 def process_file(path: Path):
